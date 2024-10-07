@@ -110,7 +110,7 @@ class TransAm(nn.Module):
         # 定义模型的前向传播方法
         # src: 输入数据,形状为(input_window, batch_size, 1)
         # 如果源序列掩码未创建或大小不匹配
-        if self.src_mask is None or self.src_mask.size(0) != len(src):
+        if self.src_mask is None or self.src_mask.size(0) != len(src):#torch.Size([100, 10, 1])
             # 获取输入数据所在的设备(CPU或GPU)
             device = src.device
             # 生成适当大小的掩码并移到相同设备
@@ -118,7 +118,7 @@ class TransAm(nn.Module):
             self.src_mask = mask
         # 输入嵌入
         src = self.input_embedding(src) # linear transformation before positional embedding
-        # 添加位置编码
+        # 添加位置编码 torch.Size([100, 10, 250])
         src = self.pos_encoder(src)
         # 通过Transformer编码器
         output = self.transformer_encoder(src,self.src_mask)#, self.src_mask)
@@ -164,7 +164,16 @@ def create_inout_sequences(input_data, input_window ,output_window):
 
 def get_data():
     # construct a littel toy dataset
+    # np.arange(start, stop, step) 生成一个数组
+    # 从0开始，到400结束（不包括400），步长为0.1
+    # 这将生成4000个数据点 (400 / 0.1 = 4000)
     time        = np.arange(0, 400, 0.1) #生成4000个数据点
+    # 1. np.sin(time): 基本的正弦波
+    # 2. np.sin(time * 0.05): 频率较低的正弦波
+    # 3. np.sin(time * 0.12) * np.random.normal(-0.2, 0.2, len(time)):
+    #    - 频率介于前两者之间的正弦波
+    #    - 乘以一个均值为-0.2，标准差为0.2的正态分布随机数
+    #    - 这部分添加了随机噪声，使信号更接近真实世界的数据
     amplitude   = np.sin(time) + np.sin(time * 0.05) + \
                   np.sin(time * 0.12) * np.random.normal(-0.2, 0.2, len(time))#生成了一个复合的时间序列信号
 
@@ -185,8 +194,9 @@ def get_data():
     #训练数据集大小
     sampels = int(len(time) * train_size) # use a parameter to control training size
     train_data = amplitude[:sampels]
+    #切割训练数据集
     test_data = amplitude[sampels:]
-
+    #切割测试训练集
     # convert our train data into a pytorch train tensor
     #train_tensor = torch.FloatTensor(train_data).view(-1)
 
@@ -208,11 +218,15 @@ def get_batch(input_data, i , batch_size):
 
     # batch_len = min(batch_size, len(input_data) - 1 - i) #  # Now len-1 is not necessary
     batch_len = min(batch_size, len(input_data) - i)
-    data = input_data[ i:i + batch_len ]
+    data = input_data[ i:i + batch_len ]#torch.Size([10, 2, 100])
 
     # stack函数将一系列张量沿着一个新维度进行堆叠。
 
     # view方法重塑张量的维度。
+    # 1. [item[0] for item in data] 是一个列表推导，选择每个数据项的第一个元素
+    # 2. torch.stack() 将这些元素堆叠成一个新的张量
+    # 3. .view((input_window, batch_len, 1)) 重塑张量维度为 (序列长度, 批次大小, 特征数)
+    # 这里假设 input_window 是预定义的全局变量，表示输入序列的长度
     input = torch.stack([item[0] for item in data]).view((input_window,batch_len,1))
     # ( seq_len, batch, 1 ) , 1 is feature size
     target = torch.stack([item[1] for item in data]).view((input_window,batch_len,1))
