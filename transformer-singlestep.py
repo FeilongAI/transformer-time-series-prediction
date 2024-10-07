@@ -55,10 +55,10 @@ class PositionalEncoding(nn.Module):
         # 将pe注册为模块的缓冲区
         # 这样pe就不会被视为模型参数,但会随模型一起保存和加载
 
-    def forward(self, x):
+    def forward(self, x):#torch.Size([100, 10, 250])
         # print(self.pe[:x.size(0), :].repeat(1,x.shape[1],1).shape ,'---',x.shape)
-        # dimension 1 maybe inequal batchsize
-        return x + self.pe[:x.size(0), :].repeat(1,x.shape[1],1)
+        # dimension 1 maybe inequal batchsize pe:torch.Size([5000, 1, 250])
+        return x + self.pe[:x.size(0), :].repeat(1,x.shape[1],1)#torch.Size([100, 10, 250])
         # x.size(0)获取输入序列的实际长度
         # self.pe[:x.size(0), :]选择对应长度的位置编码
         # repeat(1, x.shape[1], 1)将位置编码扩展到与输入的批次大小相匹配
@@ -116,14 +116,14 @@ class TransAm(nn.Module):
             # 生成适当大小的掩码并移到相同设备
             mask = self._generate_square_subsequent_mask(len(src)).to(device)
             self.src_mask = mask
-        # 输入嵌入
+        # 输入嵌入 torch.Size([100, 10, 1]) -> torch.Size([100, 10, 250])
         src = self.input_embedding(src) # linear transformation before positional embedding
         # 添加位置编码 torch.Size([100, 10, 250])
         src = self.pos_encoder(src)
         # 通过Transformer编码器
         output = self.transformer_encoder(src,self.src_mask)#, self.src_mask)
         # 解码得到最终输出
-        output = self.decoder(output)
+        output = self.decoder(output)#torch.Size([100, 10, 1])
         return output
 
     def _generate_square_subsequent_mask(self, sz):
