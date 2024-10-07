@@ -4,7 +4,7 @@ import numpy as np
 import time
 import math
 from matplotlib import pyplot
-
+from sklearn.preprocessing import MinMaxScaler
 torch.manual_seed(0)
 np.random.seed(0)
 
@@ -26,60 +26,114 @@ device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 class PositionalEncoding(nn.Module):
 
-    def __init__(self, d_model, max_len=5000):
-        super(PositionalEncoding, self).__init__()       
-        pe = torch.zeros(max_len, d_model)
+    def __init__(self, d_model, max_len=5000): # d_model 模型的维度 max_len 最大序列长度，默认为5000
+        # 调用父类nn.Module的初始化方法
+        super(PositionalEncoding, self).__init__()
+        # 创建一个形状为(max_len, d_model)的零张量,用于存储位置编码
+        pe = torch.zeros(max_len, d_model) # 创建位置编码矩阵
         position = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        # 创建一个列向量,包含从0到max_len-1的位置索引
+        # unsqueeze(1)将其变为列向量,形状为(max_len, 1)
         # div_term = torch.exp(
         #     torch.arange(0, d_model, 2).float() * (-math.log(10000.0) / d_model)
         # )
         div_term = 1 / (10000 ** ((2 * np.arange(d_model)) / d_model))
+        # 计算位置编码的频率项
+        # 使用numpy的arange函数创建一个数组,然后用它来计算div_term
+        # 这个计算方法是位置编码的核心,用于生成不同频率的正弦波
         pe[:, 0::2] = torch.sin(position * div_term[0::2])
+        # 使用正弦函数填充偶数列
+        # 0::2表示从索引0开始,步长为2,即所有偶数索引
         pe[:, 1::2] = torch.cos(position * div_term[1::2])
-
+        # 使用余弦函数填充奇数列
+        # 1::2表示从索引1开始,步长为2,即所有奇数索引
         pe = pe.unsqueeze(0).transpose(0, 1) # [5000, 1, d_model],so need seq-len <= 5000
+        # 首先unsqueeze(0)在第0维增加一个维度,然后transpose(0,1)交换前两个维度
+        # 最终pe的形状变为(max_len, 1, d_model)
         #pe.requires_grad = False
         self.register_buffer('pe', pe)
+        # 将pe注册为模块的缓冲区
+        # 这样pe就不会被视为模型参数,但会随模型一起保存和加载
 
     def forward(self, x):
         # print(self.pe[:x.size(0), :].repeat(1,x.shape[1],1).shape ,'---',x.shape)
         # dimension 1 maybe inequal batchsize
         return x + self.pe[:x.size(0), :].repeat(1,x.shape[1],1)
+        # x.size(0)获取输入序列的实际长度
+        # self.pe[:x.size(0), :]选择对应长度的位置编码
+        # repeat(1, x.shape[1], 1)将位置编码扩展到与输入的批次大小相匹配
+        # 最后将位置编码加到输入x上,实现位置信息的注入
           
 
 class TransAm(nn.Module):
+    # 初始化方法,设置模型的主要参数
+    # feature_size: 特征维度,默认250
+    # num_layers: Transformer编码器的层数,默认1
+    # dropout: dropout率,用于防止过拟合,默认0.1
     def __init__(self,feature_size=250,num_layers=1,dropout=0.1):
+        # 调用父类(nn.Module)的初始化方法
         super(TransAm, self).__init__()
+        # 设置模型类型为'Transformer'
         self.model_type = 'Transformer'
+        # 创建输入嵌入层,将1维输入转换为feature_size维
+        # 这一步相当于将单变量时间序列扩展到高维空间
         self.input_embedding  = nn.Linear(1,feature_size)
+        # 初始化源序列掩码为None,后续会根据需要生成
         self.src_mask = None
-
+        # 创建位置编码器,使用之前定义的PositionalEncoding类
+        # 位置编码用于为序列中的每个元素添加位置信息
         self.pos_encoder = PositionalEncoding(feature_size)
+        #  # 创建一个Transformer编码器层
+        #         # d_model: 模型的维度,等于feature_size
+        #         # nhead: 多头注意力中的头数,这里设为10
+        #         # dropout: dropout率,使用传入的参数
         self.encoder_layer = nn.TransformerEncoderLayer(d_model=feature_size, nhead=10, dropout=dropout)
+        # 创建完整的Transformer编码器,包含多个编码器层
+        # num_layers决定了编码器层的重复次数
         self.transformer_encoder = nn.TransformerEncoder(self.encoder_layer, num_layers=num_layers)
+        # 创建解码器,将feature_size维的特征映射回1维输出
+        # 这一步相当于从高维空间映射回原始的时间序列空间
         self.decoder = nn.Linear(feature_size,1)
+        # 调用权重初始化方法
         self.init_weights()
 
-    def init_weights(self):
-        initrange = 0.1    
+    def init_weights(self):#  # 初始化模型权重的方法
+        # 设置初始化范围
+        initrange = 0.1
+        # 将解码器的偏置初始化为0
         self.decoder.bias.data.zero_()
+        # 将解码器的权重初始化为均匀分布
+        # 范围是[-initrange, initrange]
         self.decoder.weight.data.uniform_(-initrange, initrange)
 
     def forward(self,src):
-        # src with shape (input_window, batch_len, 1)
+        # 定义模型的前向传播方法
+        # src: 输入数据,形状为(input_window, batch_size, 1)
+        # 如果源序列掩码未创建或大小不匹配
         if self.src_mask is None or self.src_mask.size(0) != len(src):
+            # 获取输入数据所在的设备(CPU或GPU)
             device = src.device
+            # 生成适当大小的掩码并移到相同设备
             mask = self._generate_square_subsequent_mask(len(src)).to(device)
             self.src_mask = mask
-
+        # 输入嵌入
         src = self.input_embedding(src) # linear transformation before positional embedding
+        # 添加位置编码
         src = self.pos_encoder(src)
+        # 通过Transformer编码器
         output = self.transformer_encoder(src,self.src_mask)#, self.src_mask)
+        # 解码得到最终输出
         output = self.decoder(output)
         return output
 
     def _generate_square_subsequent_mask(self, sz):
+        # 生成上三角矩阵
+        # 创建上三角矩阵,然后转置
+        # 这确保了每个位置只能注意到它自己和之前的位置
         mask = (torch.triu(torch.ones(sz, sz)) == 1).transpose(0, 1)
+
+        # 将掩码转换为浮点数
+        # 将0替换为负无穷(表示屏蔽),将1替换为0.0(表示保留)
         mask = mask.float().masked_fill(mask == 0, float('-inf')).masked_fill(mask == 1, float(0.0))
         return mask
 
@@ -97,34 +151,38 @@ so the actual number of blocks is [N - block_len + 1]
 def create_inout_sequences(input_data, input_window ,output_window):
     inout_seq = []
     L = len(input_data)
-    block_num =  L - block_len + 1
+    block_num =  L - block_len + 1 #总的长度3200 -101
     # total of [N - block_len + 1] blocks
     # where block_len = input_window + output_window
 
     for i in range( block_num ):
-        train_seq = input_data[i : i + input_window]
-        train_label = input_data[i + output_window : i + input_window + output_window]
+        train_seq = input_data[i : i + input_window]#0 100
+        train_label = input_data[i + output_window : i + input_window + output_window]#1，101 最后一个应该是预测值
         inout_seq.append((train_seq ,train_label))
 
     return torch.FloatTensor(np.array(inout_seq))
 
 def get_data():
     # construct a littel toy dataset
-    time        = np.arange(0, 400, 0.1)    
+    time        = np.arange(0, 400, 0.1) #生成4000个数据点
     amplitude   = np.sin(time) + np.sin(time * 0.05) + \
-                  np.sin(time * 0.12) * np.random.normal(-0.2, 0.2, len(time))
+                  np.sin(time * 0.12) * np.random.normal(-0.2, 0.2, len(time))#生成了一个复合的时间序列信号
 
-    from sklearn.preprocessing import MinMaxScaler
+
     
     #loading weather data from a file
     #from pandas import read_csv
     #series = read_csv('daily-min-temperatures.csv', header=0, index_col=0, parse_dates=True, squeeze=True)
     
     # looks like normalizing input values curtial for the model
+    #数据进行归一化处理 MinMaxScaler期望输入是一个二维数组，其中每列代表一个特征
     scaler = MinMaxScaler(feature_range=(-1, 1)) 
     #amplitude = scaler.fit_transform(series.to_numpy().reshape(-1, 1)).reshape(-1)
+    #fit_transform方法同时执行了两个操作：
+    # fit: 计算用于缩放的最小值和最大值。
+     #transform: 使用计算出的参数对数据进行实际的缩放。
     amplitude = scaler.fit_transform(amplitude.reshape(-1, 1)).reshape(-1)
-
+    #训练数据集大小
     sampels = int(len(time) * train_size) # use a parameter to control training size
     train_data = amplitude[:sampels]
     test_data = amplitude[sampels:]
@@ -151,6 +209,10 @@ def get_batch(input_data, i , batch_size):
     # batch_len = min(batch_size, len(input_data) - 1 - i) #  # Now len-1 is not necessary
     batch_len = min(batch_size, len(input_data) - i)
     data = input_data[ i:i + batch_len ]
+
+    # stack函数将一系列张量沿着一个新维度进行堆叠。
+
+    # view方法重塑张量的维度。
     input = torch.stack([item[0] for item in data]).view((input_window,batch_len,1))
     # ( seq_len, batch, 1 ) , 1 is feature size
     target = torch.stack([item[1] for item in data]).view((input_window,batch_len,1))
